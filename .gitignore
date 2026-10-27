@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+access.txt
+backups/
+node_modules/
+dist/
+__pycache__/
+.pytest_cache/
+*.log
