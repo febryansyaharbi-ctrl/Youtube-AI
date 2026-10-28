@@ -68,6 +68,7 @@ class Credentials(BaseModel):
 @app.post('/api/login')
 def login(data:Credentials,res:Response,req:Request):
     # Global per-account limit prevents proxy/header spoofing from bypassing controls.
+    limit('login:global',30,60)
     limit('login:'+digest(data.username.lower()),10,300)
     with Session() as s:
         user=s.scalar(select(User).where(User.username==data.username))
@@ -341,3 +342,15 @@ def disconnect(user=Depends(current)):
 @app.get('/api/events')
 def events(user=Depends(current)):
     with Session() as s: return [{'action':e.action,'detail':e.detail,'created':e.created} for e in s.scalars(select(Event).where(Event.user_id==user).order_by(Event.created.desc()).limit(100))]
+
+class AIConfig(BaseModel):
+    model:str=Field(min_length=2,max_length=100)
+@app.put('/api/settings/ai')
+def ai_config(data:AIConfig,user=Depends(current)):
+    try:
+        r=httpx.get(os.getenv('OLLAMA_URL','http://ollama:11434')+'/api/tags',timeout=5)
+        available=[x['name'] for x in r.json().get('models',[])]
+    except Exception: raise HTTPException(503,'Ollama belum tersedia.')
+    if data.model not in available: raise HTTPException(400,'Pilih model yang sudah terpasang di server.')
+    with Session() as s: set_setting(s,'ai',data.model_dump());event(s,user,'ai.model.updated',data.model);s.commit()
+    return data

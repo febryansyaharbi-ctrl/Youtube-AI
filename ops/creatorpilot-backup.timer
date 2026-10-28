@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily CreatorPilot backup
+[Timer]
+OnCalendar=*-*-* 03:30:00 Asia/Jakarta
+Persistent=true
+RandomizedDelaySec=600
+[Install]
+WantedBy=timers.target

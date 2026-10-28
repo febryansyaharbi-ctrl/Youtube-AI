@@ -1,11 +1,11 @@
 import os, json, re, httpx
 from .db import Session, setting
-class ProviderError(Exception): pass
+class ProviderError(RuntimeError): pass
 class OllamaProvider:
     def generate(self, prompt, check=lambda:None):
         with Session() as s: config=setting(s,'ai',{'model':'qwen3:4b'})
         model=config['model']
-        chunks=[]
+        chunks=[];usage={}
         with httpx.Client(timeout=httpx.Timeout(900,connect=15)) as client:
             with client.stream('POST',os.getenv('OLLAMA_URL','http://ollama:11434')+'/api/chat',json={
                 'model':model,'messages':[{'role':'system','content':'You are a careful original content producer. Follow the requested language. Never invent citations or guarantee revenue. Output only the requested JSON.'},{'role':'user','content':prompt}],
@@ -18,7 +18,12 @@ class OllamaProvider:
                         part=json.loads(line)
                         if part.get('error'): raise ProviderError('Ollama gagal memproses permintaan.')
                         chunks.append(part.get('message',{}).get('content',''))
-        try: return json.loads(''.join(chunks))
+                        if part.get('done'): usage={k:part.get(k,0) for k in ('prompt_eval_count','eval_count','total_duration')}
+        try:
+            result=json.loads(''.join(chunks))
+            if not isinstance(result,dict): raise ValueError('Expected object')
+            result['usage']=usage
+            return result
         except ValueError: raise ProviderError('Format jawaban AI belum valid. Coba ulangi dengan topik lebih spesifik.')
 
 def get_provider(): return OllamaProvider()

@@ -16,7 +16,7 @@ Self-hosted Indonesian creator studio. React/TypeScript frontend, FastAPI, Postg
 
 ## Deliberate limits
 
-This is the first working release, not a guarantee of channel growth or monetization. Local text-model output needs fact checking. The default voice is basic synthetic eSpeak NG; no cloned voice or premium TTS is implied. Videos are composed text/slide animations, not generative cinematic video. Image/video generation adapters and cloud-paid providers are not enabled. One image can be used as a video background.
+This is the first working release, not a guarantee of channel growth or monetization. Local text-model output needs fact checking. The default voice is basic synthetic eSpeak NG; no cloned voice or premium TTS is implied. Videos are composed text/slide videos, not generative cinematic video. Image/video generation adapters and cloud-paid providers are not enabled. One image can be used as a video background.
 
 Google OAuth must be configured and consented by the account owner before YouTube operations can run. Google Cloud quotas and verification requirements apply. The UI displays an application-level daily upload budget, not an invented Google remaining quota. YouTube Studio's Earn tab is authoritative for monetization eligibility; API watch-time metrics are not substituted for eligible public watch hours. Automatic mode produces a draft video; publication requires a reviewed output and explicit upload/schedule request.
 
@@ -54,7 +54,7 @@ sudo docker compose exec api python -c "import urllib.request; print(urllib.requ
 sudo bash ops/backup.sh
 ```
 
-Backup includes PostgreSQL and media; retain the `.env` key separately in secure storage. No remote backup destination is configured by default. Restore with the application stopped to avoid concurrent writes.
+Backup includes PostgreSQL and media; an encrypted-token recovery key is included as a mode-600 local secrets snapshot. Retention is 7 days. Keep an additional off-server copy in secure storage. No remote backup destination is configured by default. Restore with the application stopped to avoid concurrent writes.
 
 Schema is version 1 (`ops/schema-version.txt`); initial installation uses SQLAlchemy metadata creation. Future schema changes must add an explicit migration before upgrade; create_all does not migrate existing tables. Do not use destructive resets on production.
 

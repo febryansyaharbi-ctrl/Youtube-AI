@@ -2,6 +2,7 @@ import os, json, time
 from datetime import timedelta
 from urllib.parse import urlencode, urlparse
 import httpx
+import redis
 from .db import Session, Connection, Job, now, setting
 from .security import encrypt, decrypt
 from .media import ROOT
@@ -62,6 +63,12 @@ def upload(job_id,user,payload,check,progress):
         else:
             if state.get('_initiated'):
                 raise YouTubeError('Status inisialisasi upload belum pasti. Periksa YouTube Studio sebelum membuat upload baru.')
+            quota=redis.Redis.from_url(os.environ['REDIS_URL'])
+            key='youtube-upload-start:'+user+':'+now().strftime('%Y%m%d')
+            with quota.lock(key+':lock',timeout=10,blocking_timeout=5):
+                if not quota.sismember(key,job_id) and quota.scard(key)>=10:
+                    raise YouTubeError('Batas aplikasi 10 upload/hari telah tercapai. Coba pada hari berikutnya.')
+                quota.sadd(key,job_id);quota.expire(key,172800)
             save_upload(job_id,_initiated=True)
             response=client.post('https://www.googleapis.com/upload/youtube/v3/videos',params={'uploadType':'resumable','part':'snippet,status'},headers={**headers,'X-Upload-Content-Type':'video/mp4','X-Upload-Content-Length':str(size)},json={
                 'snippet':{'title':payload['title'][:100],'description':payload['description'][:4800],'categoryId':'27','defaultLanguage':payload['language']},

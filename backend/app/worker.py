@@ -46,6 +46,7 @@ def execute(job_id):
         guard=lambda:check(job_id)
         report=lambda pct,stage:progress(job_id,pct,stage)
         guard()
+        result={'message':'Tahap tersimpan dipulihkan.'}
         if kind in ('script','pipeline') and not payload.get('script_done'):
             report(5,'AI sedang menyusun naskah orisinal')
             data=get_provider().generate(script_prompt(p),guard)
@@ -56,7 +57,7 @@ def execute(job_id):
                 if project.revision!=payload['revision']: raise RuntimeError('Proyek berubah sejak job dibuat.')
                 project.revision+=1
                 project.script=script[:15000];project.description=str(data.get('description',''))[:4800];project.approved=False
-                project.result={**project.result,'fact_check':data.get('fact_check',[]),'tags':data.get('tags',[])}
+                project.result={**project.result,'fact_check':data.get('fact_check',[]),'tags':data.get('tags',[]),'usage':data.get('usage',{})}
                 j=s.get(Job,job_id);j.payload={**j.payload,'script_done':True,'revision':project.revision};s.commit();p=project
             result={'message':'Naskah tersedia. Periksa fakta dan orisinalitas sebelum publikasi.'}
         if kind in ('render','pipeline'):

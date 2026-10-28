@@ -12,6 +12,7 @@ from app.security import ph
 def test_real_workflow_and_security():
     assert engine.url.database.endswith('_test'), 'Tests require an isolated test database'
     Base.metadata.drop_all(engine)
+    assert cache.connection_pool.connection_kwargs.get('db')==15
     cache.flushdb()
     with TestClient(app,base_url=os.environ['PUBLIC_URL']) as c:
         assert c.get('/api/projects').status_code==401

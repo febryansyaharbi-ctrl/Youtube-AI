@@ -1,0 +1,10 @@
+[Unit]
+Description=CreatorPilot local database and media backup
+Requires=docker.service
+After=docker.service
+[Service]
+Type=oneshot
+WorkingDirectory=/home/harnet/creatorpilot
+ExecStart=/bin/bash /home/harnet/creatorpilot/ops/backup.sh
+Nice=15
+IOSchedulingClass=idle
