@@ -1,19 +1,8 @@
-# Deployment handoff
 
-- Public application: https://studio.cekwifi.site/
-- Dedicated Compose project: `creatorpilot`.
-- Application on loopback port 8033, routed by the existing Caddy service behind Cloudflare Tunnel.
-- Existing Cekwifi routes retained; its public homepage responded HTTP 200 after route installation.
-- Admin username: `harnet`. Initial application password is generated independently from VPS credentials; it is never committed.
-- Local operator computer receives `CreatorPilot-Login.txt` on its Desktop. Server copy is `access.txt`, mode 600, ignored by Git.
-- Daily local backup timer: `creatorpilot-backup.timer`, approximately 03:30 Asia/Jakarta, seven-day retention. This is not an off-server disaster-recovery backup.
-- Production health endpoint returns `status: ok`. Current TypeScript production build completed.
-- Isolated integration suite passed: authentication and CSRF/origin checks, resource ownership, idempotent submission, edit locks, job pause/resume, a real FFmpeg MP4/SRT render, protected media access and stored future schedules.
+## Final production verification
 
-## External setup still required
-
-Google Cloud OAuth web client setup and account-owner consent are required before upload, official caption retrieval or analytics can be used. Configure these in the application's Settings page. Exact callback:
-
-`https://studio.cekwifi.site/api/youtube/callback`
-
-No live Google upload has been claimed or performed without that connection. The deployment does not enable paid AI providers or generative image/video models. Default video production uses composed text/image scenes and basic eSpeak NG narration.
+- AI-to-video sample completed at 100%: 50.423 seconds, H.264 720x1280 with AAC audio, SRT and thumbnail present.
+- Qwen3 4B performed real script generation; CPU throughput measured around 1.2 tokens/second on this VPS.
+- Qwen3 1.7B was installed, verified with a live JSON generation request, and selected in the database as the faster default. 4B remains available in Settings; only one model loads at a time.
+- Worker and scheduler restarted successfully after the sample completed. Public API health remained OK and the Cekwifi homepage still returned HTTP 200.
+- YouTube publication/analytics remains unverified pending the owner's Google OAuth configuration and consent.
