@@ -49,7 +49,7 @@ def own(s,model,id,user):
     return item
 
 def job_dict(j):
-    return {'id':j.id,'project_id':j.project_id,'kind':j.kind,'status':j.status,'progress':j.progress,'stage':j.stage,'result':{k:v for k,v in j.result.items() if not k.startswith('_')},'error':j.error,'created':j.created,'due':j.due,'attempts':j.attempts}
+    return {'asset_id':j.payload.get('asset_id'),'transcript_job':j.payload.get('transcript_job'),'id':j.id,'project_id':j.project_id,'kind':j.kind,'status':j.status,'progress':j.progress,'stage':j.stage,'result':{k:v for k,v in j.result.items() if not k.startswith('_')},'error':j.error,'created':j.created,'due':j.due,'attempts':j.attempts}
 def project_dict(p): return {key:getattr(p,key) for key in ('id','title','niche','audience','language','format','mode','script','description','result','rights','approved','made_for_kids','synthetic','revision','created')}
 
 @app.get('/api/health')
@@ -57,7 +57,7 @@ def health():
     try:
         with Session() as s: s.execute(text('SELECT 1'))
         cache.ping()
-        return {'status':'ok','version':'0.1.0'}
+        return {'status':'ok','version':'0.2.0'}
     except Exception: raise HTTPException(503,'Layanan belum siap')
 @app.get('/api/brand')
 def brand():
@@ -137,7 +137,10 @@ def projects(user=Depends(current)):
 def create_project(data:ProjectData,user=Depends(current)):
     limit('create:'+user,30,3600)
     with Session() as s:
-        p=Project(user_id=user,**data.model_dump());s.add(p);s.commit();return project_dict(p)
+        from .growth import profile
+        values=data.model_dump(); channel=profile(s,user)
+        if channel: values.update({k:channel[k] for k in ('niche','audience','language')})
+        p=Project(user_id=user,**values);s.add(p);s.commit();return project_dict(p)
 @app.put('/api/projects/{id}')
 def update_project(id:str,data:ProjectData,user=Depends(current)):
     with Session() as s:
@@ -150,7 +153,7 @@ def update_project(id:str,data:ProjectData,user=Depends(current)):
         s.commit();return project_dict(p)
 
 class JobRequest(BaseModel):
-    kind:str=Field(pattern='^(script|render|pipeline|mentor|analytics|upload|transcribe|highlights|captions)$')
+    kind:str=Field(pattern='^(script|render|pipeline|mentor|analytics|upload|transcribe|highlights|captions|multiclip)$')
     project_id:str|None=None
     idempotency_key:str=Field(min_length=8,max_length=100)
     payload:dict=Field(default_factory=dict)
@@ -162,7 +165,11 @@ def estimate(kind,project=None):
     return {'api_cost_idr':0,'billing':'Lokal; tidak memakai API AI berbayar. Resource VPS tetap digunakan.','estimated_minutes':'5–25' if kind in ('script','mentor','pipeline') else ('3–15' if kind=='render' else '1–10'),'estimated_ram_gb':3.5 if kind in ('script','mentor','pipeline','highlights') else 1.5,'estimated_disk_mb':300 if long else 100,'concurrency':1,'upload_budget':'Batas aplikasi 10 upload/hari; kuota Google aktual mengikuti proyek Google Cloud.','note':'Perkiraan awal, bukan benchmark. Kecepatan bergantung panjang konten dan beban server.'}
 @app.post('/api/estimate')
 def get_estimate(data:JobRequest,user=Depends(current)):
-    with Session() as s: return estimate(data.kind,own(s,Project,data.project_id,user) if data.project_id else None)
+    with Session() as s:
+        result=estimate(data.kind,own(s,Project,data.project_id,user) if data.project_id else None)
+        if data.kind=='multiclip':
+            count=min(10,max(1,len(data.payload.get('clips',[]))));result.update(estimated_minutes=f'{count*2}–{count*10}',estimated_disk_mb=count*250,estimated_ram_gb=1.5)
+        return result
 @app.post('/api/jobs')
 def create_job(data:JobRequest,user=Depends(current)):
     if not data.accept_estimate: raise HTTPException(400,'Setujui estimasi resource sebelum memulai.')
@@ -175,7 +182,15 @@ def create_job(data:JobRequest,user=Depends(current)):
             p=s.scalar(select(Project).where(Project.id==data.project_id,Project.user_id==user).with_for_update())
             if not p: raise HTTPException(404,'Proyek tidak ditemukan.')
             if s.scalar(select(Job).where(Job.project_id==p.id,Job.status.in_(ACTIVE))): raise HTTPException(409,'Proyek ini sudah memiliki pekerjaan aktif.')
+            from .growth import profile
+            channel=profile(s,user)
+            if channel and data.kind in ('script','pipeline'):
+                p.niche=channel['niche'];p.audience=channel['audience'];p.language=channel['language']
             payload={'revision':p.revision}
+            if data.kind in ('render','pipeline') and data.payload.get('subtitle_style'):
+                from .clipping import SubtitleStyle
+                try: payload['subtitle_style']=SubtitleStyle(**data.payload['subtitle_style']).model_dump()
+                except Exception: raise HTTPException(400,'Pengaturan subtitle tidak valid.')
             if data.kind=='render' and not p.script.strip(): raise HTTPException(400,'Naskah masih kosong.')
             if len(p.script.split())>1500 and data.kind=='render': raise HTTPException(400,'Batasi naskah hingga 1.500 kata untuk kapasitas server ini.')
             if data.payload.get('asset_id'):
@@ -193,16 +208,36 @@ def create_job(data:JobRequest,user=Depends(current)):
                 payload.update({k:getattr(p,k) for k in ('title','description','language','made_for_kids','synthetic')});payload.update(video=p.result['video'],privacy=privacy)
                 limit('uploads:'+user+':'+now().strftime('%Y%m%d'),10,86400)
         elif data.kind=='mentor':
-            payload={'niche':str(data.payload.get('niche','Edukasi'))[:200],'audience':str(data.payload.get('audience','Pemula'))[:300]}
+            from .growth import profile
+            channel=profile(s,user)
+            payload={'niche':channel.get('niche',str(data.payload.get('niche','Edukasi'))[:200]),'audience':channel.get('audience',str(data.payload.get('audience','Pemula'))[:300])}
         elif data.kind=='transcribe':
             asset=own(s,Asset,data.payload.get('asset_id',''),user)
             if not asset.mime.startswith(('audio/','video/')): raise HTTPException(400,'Pilih aset audio/video.')
-            payload={'asset_id':asset.id,'language':data.payload.get('language','id')}
+            from .growth import profile
+            payload={'asset_id':asset.id,'language':profile(s,user).get('language',data.payload.get('language','id'))}
             if payload['language'] not in ('id','en'): raise HTTPException(400,'Bahasa tidak didukung.')
         elif data.kind=='highlights':
             source=own(s,Job,data.payload.get('transcript_job',''),user)
             if not source.result.get('transcript'): raise HTTPException(400,'Pilih transkripsi yang sudah selesai.')
-            payload={'transcript_job':source.id}
+            from .growth import profile
+            payload={'transcript_job':source.id,**{k:v for k,v in profile(s,user).items() if k in ('niche','audience')}}
+        elif data.kind=='multiclip':
+            from .clipping import SubtitleStyle, ClipRange, validate_ranges
+            from .media import duration
+            asset=own(s,Asset,data.payload.get('asset_id',''),user)
+            if not asset.mime.startswith('video/'): raise HTTPException(400,'Pilih file video asli yang diunggah ke VPS.')
+            if data.payload.get('rights_confirmed') is not True: raise HTTPException(400,'Konfirmasi hak file video dan audio sebelum merender.')
+            source=own(s,Job,data.payload.get('transcript_job',''),user)
+            if source.kind!='transcribe' or source.status!='completed' or source.payload.get('asset_id')!=asset.id or not source.result.get('transcript'): raise HTTPException(400,'Pilih transkripsi selesai untuk file video yang sama.')
+            try:
+                ranges=[ClipRange(**c).model_dump() for c in data.payload.get('clips',[])]
+                validate_ranges(ranges,duration(ROOT/asset.path))
+                style=SubtitleStyle(**data.payload.get('subtitle_style',{})).model_dump()
+            except Exception: raise HTTPException(400,'Rentang tidak valid: 1–10 klip, masing-masing 1–180 detik di dalam durasi video, tanpa duplikat.')
+            fmt=data.payload.get('format','short')
+            if fmt not in ('short','long'): raise HTTPException(400,'Format tidak valid.')
+            payload={'asset_id':asset.id,'transcript_job':source.id,'clips':ranges,'subtitle_style':style,'format':fmt,'rights_confirmed':True}
         elif data.kind=='captions':
             video=str(data.payload.get('video_id',''))
             if not re.fullmatch(r'[A-Za-z0-9_-]{11}',video): raise HTTPException(400,'Video ID tidak valid.')
@@ -240,7 +275,7 @@ def control(id:str,action:str,user=Depends(current)):
 
 @app.get('/api/assets')
 def assets(user=Depends(current)):
-    with Session() as s: return [{'id':a.id,'name':a.name,'mime':a.mime,'size':a.size,'license':a.license} for a in s.scalars(select(Asset).where(Asset.user_id==user).order_by(Asset.created.desc()))]
+    with Session() as s: return [{'id':a.id,'name':a.name,'mime':a.mime,'size':a.size,'license':a.license,'path':a.path} for a in s.scalars(select(Asset).where(Asset.user_id==user).order_by(Asset.created.desc()))]
 @app.post('/api/assets')
 async def add_asset(file:UploadFile=File(...),license:str=Form(...),user=Depends(current)):
     if not license.strip() or len(license)>500: raise HTTPException(400,'Tuliskan sumber dan hak penggunaan aset.')
@@ -276,7 +311,9 @@ def download(path:str,user=Depends(current)):
     with Session() as s:
         values=[]
         for p in s.scalars(select(Project).where(Project.user_id==user)): values.extend(p.result.get(k) for k in ('video','subtitles','thumbnail'))
-        for j in s.scalars(select(Job).where(Job.user_id==user)): values.extend(j.result.get(k) for k in ('video','subtitles','thumbnail'))
+        for j in s.scalars(select(Job).where(Job.user_id==user)):
+            values.extend(j.result.get(k) for k in ('video','subtitles','thumbnail'))
+            for clip in j.result.get('clips',[]): values.extend(clip.get(k) for k in ('video','subtitles'))
         values.extend(s.scalars(select(Asset.path).where(Asset.user_id==user)))
         if path not in values: raise HTTPException(404)
     return FileResponse(target)
@@ -354,3 +391,57 @@ def ai_config(data:AIConfig,user=Depends(current)):
     if data.model not in available: raise HTTPException(400,'Pilih model yang sudah terpasang di server.')
     with Session() as s: set_setting(s,'ai',data.model_dump());event(s,user,'ai.model.updated',data.model);s.commit()
     return data
+
+from .growth import register
+register(app,current)
+
+from .clipping import SubtitleStyle
+@app.get('/api/subtitle-style')
+def subtitle_style(user=Depends(current)):
+    with Session() as s: return setting(s,'subtitle:'+user,SubtitleStyle().model_dump())
+@app.put('/api/subtitle-style')
+def save_subtitle_style(data:SubtitleStyle,user=Depends(current)):
+    with Session() as s: set_setting(s,'subtitle:'+user,data.model_dump());s.commit()
+    return data
+
+@app.delete('/api/outputs/{job_id}/clips/{index}')
+def delete_clip(job_id:str,index:int,user=Depends(current)):
+    with Session() as s:
+        j=s.scalar(select(Job).where(Job.id==job_id,Job.user_id==user).with_for_update())
+        if not j: raise HTTPException(404)
+        if j.status!='completed' or cache.exists('job:'+job_id): raise HTTPException(409,'Tunggu pekerjaan selesai.')
+        clips=j.result.get('clips',[])
+        if index<0 or index>=len(clips): raise HTTPException(404)
+        clip=dict(clips[index])
+        for key in ('video','subtitles'):
+            path=clip.pop(key,None)
+            if path:
+                target=(ROOT/path).resolve()
+                if target.is_relative_to((ROOT/'clips'/job_id).resolve()): target.unlink(missing_ok=True)
+        clip['deleted_at']=now().isoformat();clips[index]=clip;j.result={**j.result,'clips':clips}
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(j,'result')
+        event(s,user,'clip.deleted',job_id+':'+str(index));s.commit()
+    return {'ok':True}
+
+@app.delete('/api/outputs/{job_id}/video')
+def delete_render(job_id:str,user=Depends(current)):
+    with Session() as s:
+        j=s.scalar(select(Job).where(Job.id==job_id,Job.user_id==user).with_for_update())
+        if not j or j.kind not in ('render','pipeline'): raise HTTPException(404)
+        if j.status!='completed' or cache.exists('job:'+job_id): raise HTTPException(409,'Tunggu produksi selesai.')
+        path=j.result.get('video')
+        if not path: return {'ok':True}
+        uploads=list(s.scalars(select(Job).where(Job.user_id==user,Job.kind=='upload')))
+        if any(x.payload.get('video')==path and x.status in ACTIVE for x in uploads): raise HTTPException(409,'Batalkan upload aktif terlebih dahulu.')
+        for key in ('video','subtitles','thumbnail'):
+            name=j.result.get(key)
+            if name:
+                target=(ROOT/name).resolve()
+                if target.is_relative_to((ROOT/'renders'/j.project_id/job_id).resolve()): target.unlink(missing_ok=True)
+        j.result={k:v for k,v in j.result.items() if k not in ('video','subtitles','thumbnail')};j.result={**j.result,'deleted_at':now().isoformat()}
+        project=s.get(Project,j.project_id)
+        if project and project.result.get('video')==path:
+            project.result={k:v for k,v in project.result.items() if k not in ('video','subtitles','thumbnail','render_revision')};project.approved=False
+        event(s,user,'video.deleted',job_id);s.commit()
+    return {'ok':True}

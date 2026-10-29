@@ -60,7 +60,7 @@ def srt_time(seconds):
     ms=round(seconds*1000);h,ms=divmod(ms,3600000);m,ms=divmod(ms,60000);s,ms=divmod(ms,1000)
     return f'{h:02}:{m:02}:{s:02},{ms:03}'
 
-def render(project,folder,check,progress,background=None):
+def render(project,folder,check,progress,background=None,subtitle_style=None):
     folder.mkdir(parents=True,exist_ok=True)
     parts=segments(project.script)
     if not parts: raise RuntimeError('Naskah masih kosong.')
@@ -71,7 +71,7 @@ def render(project,folder,check,progress,background=None):
         if not clip.exists():
             txt=folder/f'{i:03}.txt';txt.write_text(text,encoding='utf-8')
             run(['espeak-ng','-v','id' if project.language=='id' else 'en-us','-s','155','-f',str(txt),'-w',str(wav)],check)
-            card(png,text,project.title,i+1,len(parts),project.format=='short',background)
+            card(png,'' if subtitle_style else text,project.title,i+1,len(parts),project.format=='short',background)
             run(['ffmpeg','-nostdin','-y','-loop','1','-i',str(png),'-i',str(wav),'-c:v','libx264','-preset','ultrafast','-tune','stillimage','-threads','2','-r','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-shortest',str(clip.with_suffix('.tmp.mp4'))],check)
             clip.with_suffix('.tmp.mp4').replace(clip)
         length=duration(clip);subtitles.append(f'{i+1}\n{srt_time(cursor)} --> {srt_time(cursor+length)}\n{text}\n');cursor+=length;clips.append(clip)
@@ -79,5 +79,14 @@ def render(project,folder,check,progress,background=None):
     run(['ffmpeg','-nostdin','-y','-f','concat','-safe','0','-i',str(listing),'-c','copy','-movflags','+faststart',str(folder/'video.tmp.mp4')],check)
     (folder/'video.tmp.mp4').replace(folder/'video.mp4')
     (folder/'subtitles.srt').write_text('\n'.join(subtitles),encoding='utf-8')
+    if subtitle_style:
+        from .clipping import burn_video
+        timeline=[];at=0
+        for text,clip in zip(parts,clips):
+            length=duration(clip);timeline.append({'start':at,'end':at+length,'text':text});at+=length
+        styled=folder/'styled'
+        burn_video(folder/'video.mp4',styled,timeline,subtitle_style,project.format=='short',check)
+        (styled/'video.mp4').replace(folder/'video.mp4')
+        (styled/'subtitles.srt').replace(folder/'subtitles.srt')
     card(folder/'thumbnail.png',project.title,project.niche,1,1,False,background)
     return {'video':str((folder/'video.mp4').relative_to(ROOT)),'subtitles':str((folder/'subtitles.srt').relative_to(ROOT)),'thumbnail':str((folder/'thumbnail.png').relative_to(ROOT)),'duration':round(cursor,1),'voice':'eSpeak NG (suara sintetis dasar)'}

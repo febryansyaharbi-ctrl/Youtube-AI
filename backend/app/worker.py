@@ -69,11 +69,18 @@ def execute(job_id):
                     asset=s.get(Asset,payload['asset_id'])
                     if not asset or asset.user_id!=user or not asset.mime.startswith('image/'): raise RuntimeError('Aset latar tidak valid.')
                     background=ROOT/asset.path
-            result=render(p,folder,guard,report,background)
+            result=render(p,folder,guard,report,background,payload.get('subtitle_style'))
             guard()
             with Session() as s:
                 project=s.get(Project,p.id)
                 project.result={**project.result,**result,'render_revision':project.revision};project.approved=False;s.commit()
+        elif kind=='multiclip':
+            from .clipping import multiclip
+            with Session() as s:
+                asset=s.get(Asset,payload['asset_id']);source=s.get(Job,payload['transcript_job'])
+                if not asset or asset.user_id!=user or not source or source.user_id!=user: raise RuntimeError('Sumber tidak ditemukan.')
+                transcript=source.result['transcript']
+            result=multiclip(job_id,payload,ROOT/asset.path,transcript,guard,report)
         elif kind=='mentor':
             report(10,'Menganalisis niche dan menyusun misi')
             result=get_provider().generate('Respond in Indonesian. Build a practical YouTube strategy for a beginner. Niche: '+payload['niche']+'. Audience: '+payload['audience']+'. JSON keys: positioning (string), pillars (array of 3 strings), ideas (array of 7 objects with title, hook), missions (array of 5 strings), cautions (array of strings). No guarantees of revenue. Do not invent search volumes.',guard)
@@ -97,7 +104,7 @@ def execute(job_id):
         elif kind=='highlights':
             with Session() as s: source=s.get(Job,payload['transcript_job'])
             report(10,'Menganalisis poin penting dari transkrip')
-            result=get_provider().generate('In Indonesian, select useful segments from this timestamped transcript. Do not invent timestamps. JSON keys: highlights (array of objects start, end, reason). Transcript: '+json.dumps(source.result.get('transcript',[]))[:10000],guard)
+            result=get_provider().generate('For niche '+payload.get('niche','edukasi')+' and audience '+payload.get('audience','pemula')+'. In Indonesian, select 3 to 5 non-identical 15–60 second useful segments with an emotional opening hook, climax, or substantial educational insight. These are editorial suggestions, not measured engagement or a promise of virality. Only use timestamps present in this transcript. Do not invent timestamps. JSON keys: highlights (array of objects start, end, reason). Transcript: '+json.dumps(source.result.get('transcript',[]))[:10000],guard)
         elif kind=='captions':
             report(10,'Mengambil caption melalui API resmi')
             tracks=youtube.request(user,'captions',{'part':'snippet','videoId':payload['video_id']})

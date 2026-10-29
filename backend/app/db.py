@@ -95,7 +95,9 @@ def setting(s, key, default=None):
 
 def set_setting(s,key,value):
     row=s.get(Setting,key)
-    if row: row.value=value
+    if row:
+        from sqlalchemy.orm.attributes import flag_modified
+        row.value=value;flag_modified(row,'value')
     else: s.add(Setting(key=key,value=value))
 
 def event(s,user,action,detail=''): s.add(Event(user_id=user,action=action,detail=detail))
